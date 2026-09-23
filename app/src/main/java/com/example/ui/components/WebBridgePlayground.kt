@@ -133,6 +133,51 @@ fun WebBridgePlayground(
           </div>
 
           <script>
+            // Native Bridge specification implementation
+            const NativeBridge = {
+              isAvailable() {
+                return typeof window.AndroidBridge !== 'undefined';
+              },
+
+              async openApp(appName) {
+                const cleanApp = appName.toLowerCase().trim();
+                if (this.isAvailable()) {
+                  return window.AndroidBridge.openApp(cleanApp);
+                }
+                
+                // Web Fallbacks
+                const deepLinks = {
+                  whatsapp: 'whatsapp://',
+                  youtube: 'https://youtube.com',
+                  instagram: 'https://instagram.com',
+                  chrome: 'https://google.com'
+                };
+
+                if (deepLinks[cleanApp]) {
+                  window.location.href = deepLinks[cleanApp];
+                  return JSON.stringify({ status: "success", method: "web_fallback" });
+                }
+                return JSON.stringify({ status: "failed", reason: "Native bridge unavailable for this app." });
+              },
+
+              async makeCall(phoneNumber) {
+                const cleanNumber = phoneNumber.replace(/[^0-9+]/g, '');
+                if (this.isAvailable()) {
+                  return window.AndroidBridge.makeCall(cleanNumber);
+                }
+                window.location.href = 'tel:' + cleanNumber;
+                return JSON.stringify({ status: "success", method: "tel_link" });
+              },
+
+              async callContact(contactName) {
+                if (this.isAvailable()) {
+                  const response = window.AndroidBridge.callContact(contactName);
+                  return response; // Returns JSON string: { status: "matched|multiple|not_found", data: [...] }
+                }
+                return JSON.stringify({ status: "failed", reason: "Browser cannot access native contacts." });
+              }
+            };
+
             function log(msg) {
               const box = document.getElementById('console-box');
               const time = new Date().toLocaleTimeString();
@@ -141,64 +186,46 @@ fun WebBridgePlayground(
 
             function checkBridge() {
               const status = document.getElementById('bridge-status');
-              if (window.AndroidBridge && typeof window.AndroidBridge.isNativeBridgeAvailable === 'function' && window.AndroidBridge.isNativeBridgeAvailable()) {
+              if (NativeBridge.isAvailable()) {
                 status.className = 'badge';
-                status.textContent = '🟢 window.AndroidBridge Active';
-                log('Native AndroidBridge detected and verified.');
+                status.textContent = '🟢 NativeBridge (window.AndroidBridge Active)';
+                log('NativeBridge verified: window.AndroidBridge is available.');
               } else {
                 status.className = 'badge missing';
                 status.textContent = '🟡 Web Fallback Mode';
-                log('Native AndroidBridge not present. Web fallbacks will be used.');
+                log('NativeBridge: window.AndroidBridge not present. Web fallbacks will be used.');
               }
             }
 
-            function testWhatsApp() {
-              if (window.AndroidBridge) {
-                log('Invoking AndroidBridge.openWhatsApp()...');
-                const res = window.AndroidBridge.openWhatsApp();
-                log('Result: ' + res);
-              } else {
-                log('Fallback: Redirecting to https://wa.me/...');
-                window.open('https://wa.me/', '_blank');
-              }
+            async function testWhatsApp() {
+              log('Calling NativeBridge.openApp("whatsapp")...');
+              const res = await NativeBridge.openApp('whatsapp');
+              log('Response: ' + res);
             }
 
-            function testOpenApp(appName) {
-              if (window.AndroidBridge) {
-                log('Invoking AndroidBridge.openApp("' + appName + '")...');
-                const res = window.AndroidBridge.openApp(appName);
-                log('Result: ' + res);
-              } else {
-                log('Fallback: Unable to open native apps in plain web.');
-              }
+            async function testOpenApp(appName) {
+              log('Calling NativeBridge.openApp("' + appName + '")...');
+              const res = await NativeBridge.openApp(appName);
+              log('Response: ' + res);
             }
 
-            function testCall(number) {
-              if (window.AndroidBridge) {
-                log('Invoking AndroidBridge.makeCall("' + number + '")...');
-                const res = window.AndroidBridge.makeCall(number);
-                log('Result: ' + res);
-              } else {
-                log('Fallback: tel:' + number);
-                window.location.href = 'tel:' + number;
-              }
+            async function testCall(number) {
+              log('Calling NativeBridge.makeCall("' + number + '")...');
+              const res = await NativeBridge.makeCall(number);
+              log('Response: ' + res);
             }
 
-            function testCallContact(name) {
-              if (window.AndroidBridge) {
-                log('Invoking AndroidBridge.callContact("' + name + '")...');
-                const res = window.AndroidBridge.callContact(name);
-                log('Result: ' + res);
-              } else {
-                log('Fallback: Cannot read device contacts in plain browser.');
-              }
+            async function testCallContact(name) {
+              log('Calling NativeBridge.callContact("' + name + '")...');
+              const res = await NativeBridge.callContact(name);
+              log('Response: ' + res);
             }
 
             function testUrl(url) {
-              if (window.AndroidBridge) {
-                log('Invoking AndroidBridge.openUrl("' + url + '")...');
+              if (window.AndroidBridge && typeof window.AndroidBridge.openUrl === 'function') {
+                log('Calling window.AndroidBridge.openUrl("' + url + '")...');
                 const res = window.AndroidBridge.openUrl(url);
-                log('Result: ' + res);
+                log('Response: ' + res);
               } else {
                 window.open(url, '_blank');
               }

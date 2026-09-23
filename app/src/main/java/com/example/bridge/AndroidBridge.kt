@@ -52,21 +52,36 @@ class AndroidBridge(
 
     private fun resultToJson(result: ActionResult): String {
         val json = JSONObject()
+        val status = when (result.actionType) {
+            "callContact" -> when {
+                result.matchedContacts.size == 1 && result.isSuccess -> "matched"
+                result.matchedContacts.size > 1 -> "multiple"
+                result.matchedContacts.isEmpty() -> "not_found"
+                result.isSuccess -> "matched"
+                else -> "not_found"
+            }
+            else -> if (result.isSuccess) "success" else "failed"
+        }
+        json.put("status", status)
+
+        val dataArr = JSONArray()
+        for (contact in result.matchedContacts) {
+            val obj = JSONObject()
+            obj.put("name", contact.name)
+            obj.put("phoneNumber", contact.phoneNumber)
+            dataArr.put(obj)
+        }
+        json.put("data", dataArr)
+        json.put("matchedContacts", dataArr)
+
         json.put("actionType", result.actionType)
         json.put("isSuccess", result.isSuccess)
         json.put("message", result.message)
+        if (!result.isSuccess) {
+            json.put("reason", result.message)
+        }
         if (result.details != null) {
             json.put("details", result.details)
-        }
-        if (result.matchedContacts.isNotEmpty()) {
-            val arr = JSONArray()
-            for (contact in result.matchedContacts) {
-                val obj = JSONObject()
-                obj.put("name", contact.name)
-                obj.put("phoneNumber", contact.phoneNumber)
-                arr.put(obj)
-            }
-            json.put("matchedContacts", arr)
         }
         return json.toString()
     }

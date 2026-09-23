@@ -38,4 +38,41 @@ class ExampleRobolectricTest {
     val result = actionManager.callContact("")
     assertEquals(false, result.isSuccess)
   }
+
+  @Test
+  fun `speech recognizer state combines partial and final text correctly`() {
+    val state = com.example.speech.SpeechRecognizerState(
+      partialText = "kholo",
+      finalText = "WhatsApp"
+    )
+    assertEquals("WhatsApp kholo", state.displayLiveText)
+  }
+
+  @Test
+  fun `speech recognizer manager initializes and supports languages`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val manager = com.example.speech.AndroidSpeechRecognizerManager(context)
+    manager.setLanguage("hi-IN")
+    assertEquals("hi-IN", manager.state.value.selectedLanguage)
+    manager.setContinuousMode(true)
+    assertTrue(manager.state.value.continuousMode)
+    manager.destroy()
+  }
+
+  @Test
+  fun `android bridge returns native bridge formatted json`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val actionManager = AndroidActionManager(context)
+    val bridge = com.example.bridge.AndroidBridge(actionManager) {}
+
+    assertTrue(bridge.isNativeBridgeAvailable())
+
+    val callJson = org.json.JSONObject(bridge.makeCall("9876543210"))
+    assertEquals("success", callJson.getString("status"))
+    assertTrue(callJson.has("data"))
+
+    val contactJson = org.json.JSONObject(bridge.callContact(""))
+    assertEquals("not_found", contactJson.getString("status"))
+    assertTrue(contactJson.has("data"))
+  }
 }

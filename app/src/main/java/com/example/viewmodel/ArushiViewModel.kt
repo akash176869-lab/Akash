@@ -14,6 +14,8 @@ import com.example.model.AssistantState
 import com.example.model.ChatMessage
 import com.example.model.ConnectionStatus
 import com.example.model.MessageSender
+import com.example.speech.AndroidSpeechRecognizerManager
+import com.example.speech.SpeechRecognizerState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -27,6 +29,9 @@ class ArushiViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     val actionManager = AndroidActionManager(application)
+
+    val speechRecognizerManager = AndroidSpeechRecognizerManager(application)
+    val speechRecognizerState: StateFlow<SpeechRecognizerState> = speechRecognizerManager.state
 
     val androidBridge = AndroidBridge(actionManager) { result ->
         recordActionResult(result)
@@ -143,6 +148,7 @@ class ArushiViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun startListening(): Boolean {
+        speechRecognizerManager.stopListening()
         if (_connectionStatus.value != ConnectionStatus.CONNECTED) {
             connect()
         }
@@ -165,6 +171,76 @@ class ArushiViewModel(application: Application) : AndroidViewModel(application) 
         } else {
             startListening()
         }
+    }
+
+    fun startSpeechRecognition(languageCode: String? = null, continuous: Boolean? = null) {
+        if (_assistantState.value == AssistantState.LISTENING) {
+            audioClient?.stopRecording()
+            _assistantState.value = AssistantState.IDLE
+        }
+        speechRecognizerManager.startListening(languageCode, continuous)
+    }
+
+    fun stopSpeechRecognition() {
+        speechRecognizerManager.stopListening()
+    }
+
+    fun cancelSpeechRecognition() {
+        speechRecognizerManager.cancel()
+    }
+
+    fun clearSpeechText() {
+        speechRecognizerManager.clear()
+    }
+
+    fun setSpeechLanguage(languageCode: String) {
+        speechRecognizerManager.setLanguage(languageCode)
+    }
+
+    fun setSpeechContinuous(enabled: Boolean) {
+        speechRecognizerManager.setContinuousMode(enabled)
+    }
+
+    fun executeVoiceCommand(text: String) {
+        val trimmed = text.trim()
+        if (trimmed.isBlank()) return
+
+        val lower = trimmed.lowercase()
+
+        // Check if directly actionable
+        when {
+            lower.contains("whatsapp") && (lower.contains("khol") || lower.contains("open") || lower.contains("chala")) -> {
+                val res = actionManager.openWhatsApp()
+                recordActionResult(res)
+            }
+            lower.startsWith("call ") || lower.startsWith("dial ") -> {
+                val target = trimmed.substring(5).trim()
+                val isNumber = target.all { it.isDigit() || it == '+' || it == ' ' || it == '-' }
+                val res = if (isNumber) {
+                    actionManager.makeCall(target)
+                } else {
+                    actionManager.callContact(target)
+                }
+                recordActionResult(res)
+            }
+            lower.contains("ko call") || lower.contains("ko phone") -> {
+                val contact = trimmed.split("ko")[0].trim()
+                val res = actionManager.callContact(contact)
+                recordActionResult(res)
+            }
+            lower.startsWith("open ") || lower.endsWith(" kholo") -> {
+                val appName = if (lower.startsWith("open ")) {
+                    trimmed.substring(5).trim()
+                } else {
+                    trimmed.substring(0, trimmed.length - 6).trim()
+                }
+                val res = actionManager.openApp(appName)
+                recordActionResult(res)
+            }
+        }
+
+        // Pass to Arushi's conversational AI turn
+        sendTextCommand(trimmed)
     }
 
     fun sendTextCommand(command: String) {
@@ -304,6 +380,7 @@ class ArushiViewModel(application: Application) : AndroidViewModel(application) 
 
     override fun onCleared() {
         super.onCleared()
+        speechRecognizerManager.destroy()
         audioClient?.release()
         liveSession?.disconnect()
     }

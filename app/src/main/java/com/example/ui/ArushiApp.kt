@@ -34,9 +34,11 @@ import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.PhoneAndroid
+import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SmartToy
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -44,6 +46,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -55,6 +58,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -75,9 +79,11 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.example.model.AssistantState
 import com.example.model.ConnectionStatus
+import com.example.speech.SpeechRecognizerState
 import com.example.ui.components.DeviceLogsScreen
 import com.example.ui.components.OrbVisualizer
 import com.example.ui.components.TranscriptView
+import com.example.ui.components.VoiceToTextScreen
 import com.example.ui.components.WebBridgePlayground
 import com.example.viewmodel.ArushiViewModel
 
@@ -97,6 +103,7 @@ fun ArushiApp(
     val actionHistory by viewModel.actionHistory.collectAsState()
     val detectedLanguage by viewModel.detectedLanguage.collectAsState()
     val selectedVoice by viewModel.selectedVoice.collectAsState()
+    val speechState by viewModel.speechRecognizerState.collectAsState()
 
     var currentTab by remember { mutableIntStateOf(0) }
     var showSettingsDialog by remember { mutableStateOf(false) }
@@ -239,12 +246,19 @@ fun ArushiApp(
                 NavigationBarItem(
                     selected = currentTab == 1,
                     onClick = { currentTab = 1 },
-                    icon = { Icon(Icons.Default.PhoneAndroid, contentDescription = "Device Bridge") },
-                    label = { Text("Device Bridge") }
+                    icon = { Icon(Icons.Default.RecordVoiceOver, contentDescription = "SpeechRecognizer STT") },
+                    label = { Text("Voice STT") },
+                    modifier = Modifier.testTag("nav_voice_to_text")
                 )
                 NavigationBarItem(
                     selected = currentTab == 2,
                     onClick = { currentTab = 2 },
+                    icon = { Icon(Icons.Default.PhoneAndroid, contentDescription = "Device Bridge") },
+                    label = { Text("Device Bridge") }
+                )
+                NavigationBarItem(
+                    selected = currentTab == 3,
+                    onClick = { currentTab = 3 },
                     icon = { Icon(Icons.Default.Code, contentDescription = "Web Bridge") },
                     label = { Text("Web Bridge") }
                 )
@@ -264,6 +278,7 @@ fun ArushiApp(
                     outputVolume = outputVolume,
                     messages = messages,
                     currentStreamingText = currentStreamingText,
+                    speechState = speechState,
                     onQuickCommand = { cmd -> viewModel.sendTextCommand(cmd) },
                     onToggleMic = {
                         if (hasMicPermission) {
@@ -272,9 +287,42 @@ fun ArushiApp(
                             micLauncher.launch(Manifest.permission.RECORD_AUDIO)
                         }
                     },
+                    onToggleSpeechToText = {
+                        if (!hasMicPermission) {
+                            micLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                        } else if (speechState.isListening) {
+                            viewModel.stopSpeechRecognition()
+                        } else {
+                            viewModel.startSpeechRecognition()
+                        }
+                    },
                     modifier = Modifier.fillMaxSize()
                 )
-                1 -> DeviceLogsScreen(
+                1 -> VoiceToTextScreen(
+                    speechState = speechState,
+                    onStartListening = { lang, cont ->
+                        if (hasMicPermission) {
+                            viewModel.startSpeechRecognition(lang, cont)
+                        } else {
+                            micLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                        }
+                    },
+                    onStopListening = { viewModel.stopSpeechRecognition() },
+                    onClear = { viewModel.clearSpeechText() },
+                    onSelectLanguage = { viewModel.setSpeechLanguage(it) },
+                    onToggleContinuous = { viewModel.setSpeechContinuous(it) },
+                    onSendToAssistant = { text ->
+                        viewModel.sendTextCommand(text)
+                        currentTab = 0
+                    },
+                    onExecuteAction = { text ->
+                        viewModel.executeVoiceCommand(text)
+                    },
+                    onRequestPermission = { micLauncher.launch(Manifest.permission.RECORD_AUDIO) },
+                    hasMicPermission = hasMicPermission,
+                    modifier = Modifier.fillMaxSize()
+                )
+                2 -> DeviceLogsScreen(
                     actionHistory = actionHistory,
                     onOpenWhatsApp = { viewModel.actionManager.openWhatsApp() },
                     onOpenYouTube = { viewModel.actionManager.openApp("YouTube") },
@@ -285,7 +333,7 @@ fun ArushiApp(
                     onClearHistory = { viewModel.clearHistory() },
                     modifier = Modifier.fillMaxSize()
                 )
-                2 -> WebBridgePlayground(
+                3 -> WebBridgePlayground(
                     androidBridge = viewModel.androidBridge,
                     modifier = Modifier.fillMaxSize()
                 )
@@ -309,8 +357,10 @@ fun LiveAssistantView(
     outputVolume: Float,
     messages: List<com.example.model.ChatMessage>,
     currentStreamingText: String,
+    speechState: SpeechRecognizerState,
     onQuickCommand: (String) -> Unit,
     onToggleMic: () -> Unit,
+    onToggleSpeechToText: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -399,10 +449,12 @@ fun LiveAssistantView(
             }
         }
 
-        // Bottom Controls: Mic FAB with Pulse Animation
+        // Bottom Controls: Mic FAB with Pulse Animation and Real-Time STT
         BottomMicControl(
             isListening = assistantState == AssistantState.LISTENING,
+            speechState = speechState,
             onToggleMic = onToggleMic,
+            onToggleSpeechToText = onToggleSpeechToText,
             onSendCommand = onQuickCommand
         )
     }
@@ -458,11 +510,21 @@ fun QuickChipsRow(onSelectCommand: (String) -> Unit) {
 @Composable
 fun BottomMicControl(
     isListening: Boolean,
+    speechState: SpeechRecognizerState,
     onToggleMic: () -> Unit,
+    onToggleSpeechToText: () -> Unit,
     onSendCommand: (String) -> Unit
 ) {
     var textInput by remember { mutableStateOf("") }
     var isKeyboardOpen by remember { mutableStateOf(false) }
+
+    // Synchronize real-time speech text directly into the input field!
+    LaunchedEffect(speechState.displayLiveText) {
+        if (speechState.isListening && speechState.displayLiveText.isNotBlank()) {
+            textInput = speechState.displayLiveText
+            isKeyboardOpen = true
+        }
+    }
 
     val infiniteTransition = rememberInfiniteTransition(label = "micPulse")
     val pulseScale by infiniteTransition.animateFloat(
@@ -483,7 +545,52 @@ fun BottomMicControl(
             modifier = Modifier.padding(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            AnimatedVisibility(visible = isKeyboardOpen) {
+            // Live Real-Time SpeechRecognizer progress bar when active
+            AnimatedVisibility(visible = speechState.isListening) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .background(Color(0xFF00E5FF), CircleShape)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "SpeechRecognizer live input...",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color(0xFF00E5FF),
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                        Text(
+                            text = "${(speechState.rmsLevel * 100).toInt()}%",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    LinearProgressIndicator(
+                        progress = { speechState.rmsLevel },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(4.dp)
+                            .clip(RoundedCornerShape(2.dp)),
+                        color = Color(0xFF00E5FF),
+                        trackColor = MaterialTheme.colorScheme.surfaceVariant
+                    )
+                }
+            }
+
+            AnimatedVisibility(visible = isKeyboardOpen || speechState.isListening) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -493,12 +600,24 @@ fun BottomMicControl(
                     OutlinedTextField(
                         value = textInput,
                         onValueChange = { textInput = it },
-                        placeholder = { Text("Type prompt (e.g. WhatsApp kholo)") },
+                        placeholder = { Text("Speak or type prompt...") },
                         modifier = Modifier
                             .weight(1f)
                             .testTag("text_command_input"),
                         shape = RoundedCornerShape(24.dp),
-                        singleLine = true
+                        singleLine = true,
+                        trailingIcon = {
+                            IconButton(
+                                onClick = onToggleSpeechToText,
+                                modifier = Modifier.testTag("input_speech_recognizer_button")
+                            ) {
+                                Icon(
+                                    imageVector = if (speechState.isListening) Icons.Default.Stop else Icons.Default.RecordVoiceOver,
+                                    contentDescription = "Voice-to-Text Input",
+                                    tint = if (speechState.isListening) Color(0xFF00E5FF) else MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     TextButton(
@@ -521,10 +640,41 @@ fun BottomMicControl(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                TextButton(onClick = { isKeyboardOpen = !isKeyboardOpen }) {
-                    Text(if (isKeyboardOpen) "Hide Keyboard" else "Type Instead")
+                TextButton(
+                    onClick = { isKeyboardOpen = !isKeyboardOpen },
+                    modifier = Modifier.testTag("toggle_keyboard_button")
+                ) {
+                    Text(if (isKeyboardOpen) "Hide" else "Type")
                 }
 
+                // Dedicated Real-time Speech-to-Text Button
+                Surface(
+                    onClick = onToggleSpeechToText,
+                    shape = RoundedCornerShape(20.dp),
+                    color = if (speechState.isListening) Color(0xFF00E5FF).copy(alpha = 0.2f) else MaterialTheme.colorScheme.surfaceVariant,
+                    modifier = Modifier.testTag("voice_to_text_quick_button")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.RecordVoiceOver,
+                            contentDescription = "Voice to Text",
+                            tint = if (speechState.isListening) Color(0xFF00E5FF) else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = if (speechState.isListening) "STT Active" else "Live STT",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (speechState.isListening) Color(0xFF00E5FF) else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                // Center Gemini Live Mic FAB
                 Box(contentAlignment = Alignment.Center) {
                     if (isListening) {
                         Box(
@@ -554,7 +704,11 @@ fun BottomMicControl(
                 }
 
                 Text(
-                    text = if (isListening) "Live Mic" else "Muted",
+                    text = when {
+                        speechState.isListening -> "STT Live"
+                        isListening -> "Gemini Mic"
+                        else -> "Tap Mic"
+                    },
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
